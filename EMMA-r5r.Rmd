@@ -1,0 +1,198 @@
+---
+title: "r5r Weichselbaum"
+output: html_notebook
+editor_options: 
+  chunk_output_type: console
+---
+
+```{r}
+# load packages
+library(r5r)
+library(sf)
+library(data.table)
+library(ggplot2)
+library(mapview)
+library(RPostgreSQL)
+library(postGIStools)
+library(rpostgis)
+library(geojsonR)
+library(dplyr)
+mapviewOptions(platform = 'leafgl')
+
+options(java.parameters = "-Xmx8G")
+
+# connect to database on netcup server
+con <- dbConnect(PostgreSQL(),
+                 dbname = "emma_db", user = "postgres",
+                 host = "195.128.100.116",
+                 #host = "localhost",
+                 password = "internet1893"
+)
+```
+
+```{r}
+# select destination and study area
+
+weichselbaum <- data.frame(
+  stringsAsFactors = FALSE,
+                id = c("weichselbaum"),
+               lon = c(11.276105),      #11.276105   11.565878 (TUM)
+               lat = c(48.085196)       #48.085196   48.148837
+           ) 
+
+location <- st_as_sf(weichselbaum, coords = c("lon", "lat"), 
+                 crs = 4326, agr = "constant")
+
+# tum <- data.frame(
+#   stringsAsFactors = FALSE,
+#                 id = c("tum"),
+#                lon = c(11.565878),
+#                lat = c(48.148837)
+#            )
+# 
+# location_tum <- st_as_sf(tum, coords = c("lon", "lat"), 
+#                  crs = 4326, agr = "constant")
+
+
+
+census_grid_radius <- 60000 #meters
+lon <- 11.276105
+lat <- 48.085196
+
+query <- paste0("SELECT * FROM public.zensus100m_emm_ew WHERE ST_DWithin(geom, st_transform(st_setsrid(ST_MakePoint(", lon, ",", lat,"),4326),3857),", census_grid_radius, ");")
+
+census_points <- pgGetGeom(conn = con, query= query)
+
+query1km <- paste0("SELECT * FROM zensus1km_emm_ew WHERE ST_DWithin(geom, st_transform(st_setsrid(ST_MakePoint(", lon, ",", lat,"),4326),3857),", census_grid_radius, ");")
+
+census_points_1km <- pgGetGeom(conn = con, query= query1km)
+#census_points_df <- data.frame(census_points)
+
+#create radius ring object for viz
+ringquery <- paste0("SELECT ST_Buffer(st_transform(ST_GeomFromText('SRID=4326;POINT(",lon," ", lat, ")'), 3857),", census_grid_radius, ", 'quad_segs=16');")
+radius_ring <- pgGetGeom(conn = con, query= ringquery, geom="st_buffer")
+
+#map
+mapview(list(census_points, radius_ring, location))
+#mapview(location, cex = 200, legend = T)
+
+```
+
+
+```{r}
+# setup r5r
+
+path <- paste0(getwd(), "/data/delfi_emm_20211028")
+r5r_core <- setup_r5(data_path = path, verbose = FALSE)
+
+ 
+```
+
+```{r}
+
+
+
+points_car <- st_as_sf(census_points_1km) %>% st_transform(4326)
+points_car <- points_car %>% mutate(id=gitter_id_1km)
+
+points <- st_as_sf(census_points) %>% st_transform(4326)
+points <- points %>% mutate(id=gitter_id_100m)
+
+# CAR
+# set inputs
+#mode <- c("WALK", "TRANSIT")
+mode <- "CAR"
+max_walk_dist <- 2000
+max_trip_duration <- 90
+departure_datetime <- as.POSIXct("28-10-2021 07:00:00",
+                                 format = "%d-%m-%Y %H:%M:%S")
+
+# calculate a travel time matrix
+ttm_car <- travel_time_matrix(r5r_core = r5r_core,
+                          origins = points_car,
+                          destinations = weichselbaum,
+                          mode = mode,
+                          departure_datetime = departure_datetime,
+                          max_walk_dist = max_walk_dist,
+                          max_trip_duration = max_trip_duration,
+                          verbose = FALSE)
+ttm_car <- ttm_car %>% mutate(id=fromId)
+
+mapping <- left_join(points_car, ttm_car, by = "id")
+mapping <- mapping %>% mutate(tt_car = travel_time)
+
+mapview(mapping, zcol="travel_time")
+
+
+
+# PT
+# set inputs
+mode <- c("WALK", "TRANSIT")
+max_walk_dist <- 3000
+max_trip_duration <- 360
+departure_datetime <- as.POSIXct("28-10-2021 07:00:00",
+                                 format = "%d-%m-%Y %H:%M:%S")
+
+# calculate a travel time matrix
+ttm_pt <- travel_time_matrix(r5r_core = r5r_core,
+                          origins = points_car,
+                          destinations = weichselbaum,
+                          mode = mode,
+                          departure_datetime = departure_datetime,
+                          max_walk_dist = max_walk_dist,
+                          max_trip_duration = max_trip_duration,
+                          verbose = FALSE)
+ttm_pt <- ttm_pt %>% mutate(id=fromId)
+# mapping <- mapping %>% mutate(id=gitter_id_1km)
+mapping <- left_join(mapping, ttm_pt, by = "id")
+mapping <- mapping %>% mutate(tt_pt = travel_time)#.y)
+
+# clean up
+mapping <- mapping %>% select(gitter_id_1km, einwohner, tt_pt, tt_car, geometry) %>% 
+  mutate(tt_ratio = tt_pt/tt_car)
+
+mapview(mapping, zcol="tt_ratio")
+mapview(mapping, zcol="tt_car")
+mapview(mapping, zcol="tt_pt")
+
+```
+
+
+```{r}
+# Analysis
+
+# Share of people for each slice of travel time ratio
+
+mapping$category <- cut(mapping$tt_ratio, 
+                   breaks=c(-Inf, 3, 5, 7, 10, 15, Inf), 
+                   labels=c("0-3", "3-5", "5-7", "7-10", "10-15", "15+"))
+
+# mapping %>% 
+#   #mutate(tt_ratio_capped = if_else(tt_ratio <=5, tt_ratio, 5)) %>% 
+#   ggplot(aes(x=category)) +
+#   geom_bar()
+# 
+
+mapping_tum <- mapping
+
+mapping %>% 
+  group_by(category) %>% 
+  summarize(affected = sum(einwohner)) %>% 
+  ggplot(aes(x=category, y = affected)) +
+  geom_bar(stat="identity")
+
+# mapping_weichselbaum %>% 
+#   group_by(category) %>% 
+#   summarize(affected = sum(einwohner)) %>% 
+#   ggplot(aes(x=category, y = affected)) +
+#   geom_bar(stat="identity")
+# 
+# mapping_tum %>% 
+#   group_by(category) %>% 
+#   summarize(affected = sum(einwohner)) %>% 
+#   ggplot(aes(x=category, y = affected)) +
+#   geom_bar(stat="identity")
+
+
+```
+
