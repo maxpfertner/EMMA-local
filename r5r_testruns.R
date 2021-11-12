@@ -1,6 +1,6 @@
 # load packages
 
-options(java.parameters = '-Xmx10G')
+options(java.parameters = '-Xmx16G')
 
 library(rJava)
 library(r5r)
