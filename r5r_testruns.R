@@ -1,6 +1,6 @@
 # load packages
 
-options(java.parameters = '-Xmx16G')
+options(java.parameters = '-Xmx20G')
 
 library(rJava)
 library(r5r)
@@ -56,7 +56,7 @@ location <- st_as_sf(weichselbaum, coords = c("lon", "lat"),
 
 
 
-census_grid_radius <- 25000 #meters
+census_grid_radius <- 5000 #meters
 lon <- 11.276105
 lat <- 48.085196
 
@@ -65,7 +65,7 @@ lat <- 48.085196
 #census_points <- pgGetGeom(conn = con, query= query)
 
 #query1km <- paste0("SELECT * FROM zensus1km_emm_ew WHERE ST_DWithin(geom, st_transform(st_setsrid(ST_MakePoint(", lon, ",", lat,"),4326),3857),", census_grid_radius, ");")
-query1km <- paste0("SELECT * FROM zensusgrid_1km_emm_centroids WHERE ST_DWithin(geom, st_transform(st_setsrid(ST_MakePoint(", lon, ",", lat,"),4326),3857),", census_grid_radius, ");")
+query1km <- paste0("SELECT * FROM zensus100m_emm_ew WHERE ST_DWithin(geom, st_transform(st_setsrid(ST_MakePoint(", lon, ",", lat,"),4326),3857),", census_grid_radius, ");")
 
 census_points_1km <- pgGetGeom(conn = con, query= query1km)
 #census_points_df <- data.frame(census_points)
@@ -128,7 +128,7 @@ ttm_pt <- travel_time_matrix(r5r_core = r5r_core,
                              destinations = weichselbaum,
                              mode = mode,
                              departure_datetime = departure_datetime,
-                             time_window = 60,
+                             time_window = 30,
                              percentiles = c(1, 5, 25, 50, 75, 95),
                              max_rides = 4,
                              max_walk_dist = max_walk_dist,
@@ -137,10 +137,10 @@ ttm_pt <- travel_time_matrix(r5r_core = r5r_core,
 ttm_pt <- ttm_pt %>% mutate(id=fromId)
 mapping <- mapping %>% mutate(id=gitter_id_100m)
 mapping <- left_join(mapping, ttm_pt, by = "id")
-mapping <- mapping %>% mutate(tt_pt = tt_pt)
+mapping <- mapping %>% mutate(tt_pt = travel_time_p001)
 
 # clean up
-mapping <- mapping %>% select(de_gitter_, einwohner, tt_pt, tt_car, geometry) %>% 
+mapping <- mapping %>% select(gitter_id_100m, einwohner, tt_pt, tt_car, geometry) %>% 
   mutate(tt_ratio = tt_pt/tt_car)
 
 mapview(mapping, zcol="tt_ratio", labels = T)
@@ -158,7 +158,8 @@ tmap_mode("view")
 tm_shape(mapping) +
   tm_dots("tt_ratio", 
           style="quantile", 
-          title="Travel time ratio")
+          title="Travel time ratio") +
+  tm_basemap(server = "https://tileserver.memomaps.de/tilegen/{z}/{x}/{y}.png")
 
 
 
