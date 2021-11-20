@@ -57,7 +57,7 @@ location <- st_as_sf(weichselbaum, coords = c("lon", "lat"),
 
 
 
-census_grid_radius <- 25000 #meters
+census_grid_radius <- 5000 #meters
 lon <- 11.276105
 lat <- 48.085196
 
@@ -65,7 +65,8 @@ lat <- 48.085196
 
 #census_points <- pgGetGeom(conn = con, query= query)
 
-query1km <- paste0("SELECT * FROM zensus1km_emm_ew WHERE ST_DWithin(geom, st_transform(st_setsrid(ST_MakePoint(", lon, ",", lat,"),4326),3857),", census_grid_radius, ");")
+#query1km <- "SELECT * FROM zensusgrid_500m_emm;"
+query1km <- paste0("SELECT * FROM zensusgrid_500m_emm WHERE ST_DWithin(geom, st_transform(st_setsrid(ST_MakePoint(", lon, ",", lat,"),4326),3857),", census_grid_radius, ");")
 #query1km <- paste0("SELECT * FROM zensus100m_emm_ew WHERE ST_DWithin(geom, st_transform(st_setsrid(ST_MakePoint(", lon, ",", lat,"),4326),3857),", census_grid_radius, ");")
 #query1km <- paste0("SELECT * FROM zensusgrid_100m_grid_muc WHERE ST_DWithin(geom, st_transform(st_setsrid(ST_MakePoint(", lon, ",", lat,"),4326),3857),", census_grid_radius, ");")
 
@@ -86,8 +87,8 @@ tm_shape(census_points_1km) +
 
 
 
-points_car <- st_as_sf(census_points_1km) %>% st_transform(4326)
-points_car <- points_car %>% mutate(id=gitter_id_1km)
+points_car <- st_as_sf(census_points_1km) %>% st_transform(4326) %>% st_centroid() #st_centroid only needed for 500m cells
+points_car <- points_car %>% mutate(id=id)
 
 # points <- st_as_sf(census_points) %>% st_transform(4326)
 # points <- points %>% mutate(id=gitter_id_100m)
@@ -97,7 +98,7 @@ points_car <- points_car %>% mutate(id=gitter_id_1km)
 #mode <- c("WALK", "TRANSIT")
 mode <- "CAR"
 max_walk_dist <- 1000
-max_trip_duration <- 90
+max_trip_duration <- 30
 departure_datetime <- as.POSIXct("28-10-2021 07:00:00",
                                  format = "%d-%m-%Y %H:%M:%S")
 
@@ -109,7 +110,7 @@ ttm_car <- travel_time_matrix(r5r_core = r5r_core,
                               departure_datetime = departure_datetime,
                               max_walk_dist = max_walk_dist,
                               max_trip_duration = max_trip_duration,
-                              verbose = TRUE)
+                              verbose = FALSE)
 ttm_car <- ttm_car %>% mutate(id=fromId)
 
 mapping <- left_join(points_car, ttm_car, by = "id")
@@ -117,7 +118,7 @@ mapping <- mapping %>% mutate(tt_car = travel_time)
 
 #mapview(mapping, zcol="travel_time")
 
-
+jgc()
 
 # PT
 # set inputs
@@ -236,3 +237,15 @@ finalPlot <- ggdraw() +
   draw_plot(map, 0, 0, 1, 1) +
   draw_plot(legend, 0.2, .65, 0.2, 0.2)
 finalPlot
+
+tmap_mode("view")
+tm_shape(grid3) +
+  tm_polygons("tt_pt",
+          style="quantile",
+          title="Travel time ratio") +
+  tm_basemap(server = "https://tileserver.memomaps.de/tilegen/{z}/{x}/{y}.png")
+
+# saveRDS(grid3, file = "grid40km.rds")
+# saveRDS(mapping, file = "mapping_40km.rds")
+# saveRDS(ttm_car, file = "ttm_car_40km.rds")
+# saveRDS(ttm_pt, file = "ttm_ptr_40km.rds")
