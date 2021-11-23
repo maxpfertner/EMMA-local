@@ -1,0 +1,245 @@
+---
+title: "EMMA local analysis - Pilot"
+output: html_document
+editor_options: 
+  chunk_output_type: console
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+
+library(tidyverse)
+library(biscale)
+library(cowplot)
+library(tmap)
+library(sf)
+library(viridis)
+library(scales)
+```
+
+## Basics
+
+All analysis was done on the server.
+
+Key parameters:
+
+```{r}
+# Radius to select census points in a 1km grid
+census_grid_radius <- 40000 #meters
+
+# Coordinates of workplace location (Weichselbaum)
+lon <- 11.276105
+lat <- 48.085196
+
+# Weichselbaum Marker
+weichselbaum <- data.frame(
+  stringsAsFactors = FALSE,
+  id = c("weichselbaum"),
+  lon = c(lon),
+  lat = c(lat)      
+) 
+
+weichselbaum <- st_as_sf(weichselbaum, coords = c("lon", "lat"), 
+                     crs = 4326, agr = "constant")
+```
+
+
+Load the data:
+
+```{r}
+
+# travel time matrix PT
+ttm_pt <- readRDS("C:/Users/ga72jij/LRZ Sync+Share/DFG Erreichbarkeitsmodell Arbeitsstandorte/Accessibility Model/EMMA-local/Results/ttm_ptr_40km.rds")
+
+# ttm car
+ttm_car <- readRDS("C:/Users/ga72jij/LRZ Sync+Share/DFG Erreichbarkeitsmodell Arbeitsstandorte/Accessibility Model/EMMA-local/Results/ttm_car_40km.rds")
+
+# point-based results
+mapping <- readRDS("C:/Users/ga72jij/LRZ Sync+Share/DFG Erreichbarkeitsmodell Arbeitsstandorte/Accessibility Model/EMMA-local/Results/mapping_40km.rds")
+
+# grid-based results
+grid <- readRDS("C:/Users/ga72jij/LRZ Sync+Share/DFG Erreichbarkeitsmodell Arbeitsstandorte/Accessibility Model/EMMA-local/Results/grid40km.rds")
+```
+
+
+
+## Fixes for more realistic values
+
+```{r}
+# add 5 minutes access and egress time for car
+grid$tt_car <- grid$tt_car +5
+grid$tt_ratio <- grid$tt_pt / grid$tt_car
+
+
+```
+
+
+
+- interactive map with tmap
+
+### PT Travel Time
+
+```{r}
+tmap_mode("view")
+
+tm_shape(grid) +
+  tm_polygons("tt_pt",
+          style="fixed",
+          breaks = c(0,5,10,15,20,25,30,45,60, 90, 120, Inf),
+          title="Travel time PT [min]",
+          alpha = .7,
+          popup.vars = c("tt_pt", "tt_car", "tt_ratio", "einwohner.y"),
+          palette = "-magma",
+          lwd = 0,
+          colorNA = "white") +
+  
+   tm_shape(weichselbaum) + tm_dots("id", size=0.1,col="red",shapeNA=NA, title="Location") + 
+  tm_legend(text.size=1,title.size=1.2) + 
+  tm_basemap(server = "https://tileserver.memomaps.de/tilegen/{z}/{x}/{y}.png")
+
+```
+
+
+### Car Travel Time
+
+```{r}
+tmap_mode("view")
+
+tm_shape(grid) +
+  tm_polygons("tt_car",
+          style="fixed",
+          breaks = c(0,5,10,15,20,25,30,45,60, 90, 120, Inf),
+          title="Travel time PT [min]",
+          alpha = .7,
+          popup.vars = c("tt_pt", "tt_car", "tt_ratio", "einwohner.y"),
+          palette = "-magma",
+          lwd = 0,
+          colorNA = "white") +
+  
+   tm_shape(weichselbaum) + tm_dots("id", size=0.1,col="red",shapeNA=NA, title="Location") + 
+  tm_legend(text.size=1,title.size=1.2) + 
+  tm_basemap(server = "https://tileserver.memomaps.de/tilegen/{z}/{x}/{y}.png")
+
+```
+
+
+### Travel Time Ratio
+
+```{r}
+tmap_mode("view")
+
+tm_shape(grid) +
+  tm_polygons("tt_ratio",
+          style="fixed",
+          breaks = c(0, .5 ,1,2,3,4,5,Inf),
+          title="Travel time PT [min]",
+          alpha = .7,
+          popup.vars = c("tt_pt", "tt_car", "tt_ratio", "einwohner.y"),
+          palette = "-cividis" ,
+          lwd = 0,
+          colorNA = "white") +
+  
+   tm_shape(weichselbaum) + tm_dots("id", size=0.1,col="red",shapeNA=NA, title="Location") + 
+  tm_legend(text.size=1,title.size=1.2) + 
+  tm_basemap(server = "https://tileserver.memomaps.de/tilegen/{z}/{x}/{y}.png")
+
+```
+
+
+- static map with "biscale" package and ggplot
+
+```{r}
+data <- bi_class(grid, x = einwohner.x, y = tt_ratio, style = "quantile", dim = 3)
+
+
+map <- ggplot() +
+  geom_sf(data = data, mapping = aes(fill = bi_class),color = "white", size = 0.1,  show.legend = F) +
+  bi_scale_fill(pal = "DkViolet", dim = 3)+
+  geom_sf(data = weichselbaum, mapping = aes(fill = "red"), size=5, color = "red", show.legend = F)+
+  # labs(
+  #   title = "Race and Income in St. Louis, MO",
+  #   subtitle = "Dark Blue (DkBlue) Palette"
+  # ) +
+  bi_theme()
+
+legend <- bi_legend(pal = "DkViolet",
+                    dim = 3,
+                    xlab = "Higher population ",
+                    ylab = "Higher tt ratio ",
+                    size = 8)
+
+# combine map with legend
+finalPlot <- ggdraw() +
+  draw_plot(map, 0, 0, 1, 1) +
+  draw_plot(legend, 0.1, .65, 0.2, 0.2)
+finalPlot
+
+```
+
+
+
+## Staticstical analysis
+
+```{r}
+# Analysis
+
+# Share of people for each slice of travel time ratio
+
+grid$category <- cut(grid$tt_ratio, 
+                   breaks=c(0, .5 ,1,2, 2.5, 3,4,5,Inf), 
+                   labels=c("0-0.5", "0.5-1", "1-2", "2.0-2.5", "2.5-3", "3-4", "4-5", "5+"))
+
+# grid %>% 
+#   #mutate(tt_ratio_capped = if_else(tt_ratio <=5, tt_ratio, 5)) %>% 
+#   ggplot(aes(x=category)) +
+#   geom_bar()
+# 
+
+
+grid %>% 
+  group_by(category) %>% 
+  summarize(affected = sum(einwohner.y)) %>% 
+  ggplot(aes(x=category, y = affected)) +
+  geom_bar(stat="identity") +
+  scale_y_continuous(labels = comma) +
+  labs(x = "Travel time Ratio",
+       y = "Affected population", 
+       title = "Affected population by travel time ratio (Weichselbaum)")
+
+grid %>% 
+  group_by(tt_pt) %>% 
+  summarize(affected = sum(einwohner.y)) %>% 
+  ggplot(aes(x=tt_pt, y = affected)) +
+  geom_density(color="darkblue", fill="lightblue", stat = "identity") + 
+  coord_cartesian(xlim = c(0,300), ylim = c(0,150000)) +
+  scale_y_continuous(labels = comma) +
+   labs(x = "Travel time PT",
+       y = "Affected population", 
+       title = "Affected population by PT travel time (Weichselbaum)")
+
+grid %>% 
+  group_by(tt_car) %>% 
+  summarize(affected = sum(einwohner.y)) %>% 
+  ggplot(aes(x=tt_car, y = affected)) +
+  geom_density(color="darkblue", fill="lightblue", stat = "identity") +
+  coord_cartesian(xlim = c(0,300), ylim= c(0,150000)) +
+  scale_y_continuous(labels = comma)+
+     labs(x = "Travel time Car",
+       y = "Affected population", 
+       title = "Affected population by car travel time (Weichselbaum)")
+
+
+
+```
+
+
+## Export for QGIS
+
+```{r}
+# st_write(grid, paste0(getwd(), "/Results/", "grid_40km_1km.shp"), crs = 4326)
+# 
+# getwd()
+
+
+```
+
