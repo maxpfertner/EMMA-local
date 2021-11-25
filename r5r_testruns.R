@@ -1,6 +1,6 @@
 # load packages
 
-options(java.parameters = '-Xmx20G')
+options(java.parameters = '-Xmx22G')
 
 library(rJava)
 library(r5r)
@@ -29,7 +29,7 @@ jgc <- function()
 
 # setup r5r
 
-path <- paste0(getwd(), "/data/delfi_emm_20211028")
+path <- paste0(getwd(), "/data/filtered2")
 r5r_core <- setup_r5(data_path = path, verbose = FALSE)
 jgc()
 
@@ -57,7 +57,7 @@ location <- st_as_sf(weichselbaum, coords = c("lon", "lat"),
 
 
 
-census_grid_radius <- 5000 #meters
+census_grid_radius <- 40000 #meters
 lon <- 11.276105
 lat <- 48.085196
 
@@ -99,10 +99,11 @@ points_car <- points_car %>% mutate(id=id)
 mode <- "CAR"
 max_walk_dist <- 1000
 max_trip_duration <- 30
-departure_datetime <- as.POSIXct("28-10-2021 07:00:00",
+departure_datetime <- as.POSIXct("10-11-2021 07:00:00",
                                  format = "%d-%m-%Y %H:%M:%S")
 
 # calculate a travel time matrix
+car_time <- system.time(
 ttm_car <- travel_time_matrix(r5r_core = r5r_core,
                               origins = points_car,
                               destinations = weichselbaum,
@@ -110,61 +111,98 @@ ttm_car <- travel_time_matrix(r5r_core = r5r_core,
                               departure_datetime = departure_datetime,
                               max_walk_dist = max_walk_dist,
                               max_trip_duration = max_trip_duration,
-                              verbose = FALSE)
+                              n_threads = 6,
+                              verbose = F)
+)
+
+# time: nPOINTS= 68
+# n_threads = 1 --> 204s
+# n_threads = 7 --> 55s
+# 12 --> 48s
+# 36 --> 
+
 ttm_car <- ttm_car %>% mutate(id=fromId)
 
 mapping <- left_join(points_car, ttm_car, by = "id")
 mapping <- mapping %>% mutate(tt_car = travel_time)
 
-#mapview(mapping, zcol="travel_time")
+tmap_mode("view")
+tm_shape(mapping) +
+  tm_dots("tt_car",
+              style="quantile",
+              title="Travel time CAR") +
+  tm_basemap(server = "https://tileserver.memomaps.de/tilegen/{z}/{x}/{y}.png")
 
+
+
+
+
+# stop r5r and free RAM, then restart r5r
+stop_r5()
+r5r_core <- setup_r5(data_path = path, verbose = FALSE)
 jgc()
+
+
+
 
 # PT
 # set inputs
 mode <- c("WALK", "TRANSIT")
-max_walk_dist <- 3000
-max_trip_duration <- 360
-departure_datetime <- as.POSIXct("28-10-2021 07:00:00",
+max_walk_dist <- 1500
+max_trip_duration <- 60
+departure_datetime <- as.POSIXct("10-11-2021 08:00:00",
                                  format = "%d-%m-%Y %H:%M:%S")
 
 # calculate a travel time matrix
+pt_time <- system.time(
 ttm_pt <- travel_time_matrix(r5r_core = r5r_core,
                              origins = points_car,
                              destinations = weichselbaum,
                              mode = mode,
                              departure_datetime = departure_datetime,
-                             time_window = 30,
+                             time_window = 31,
                              percentiles = c(1, 5, 25, 50, 75, 95),
-                             max_rides = 4,
+                             max_rides = 2,
                              max_walk_dist = max_walk_dist,
                              max_trip_duration = max_trip_duration,
+                             n_threads = 7,
                              verbose = FALSE)
+)
 ttm_pt <- ttm_pt %>% mutate(id=fromId)
-mapping <- mapping %>% mutate(id=gitter_id_1km)
+#mapping <- mapping %>% mutate(id=gitter_id_1km)
 mapping <- left_join(mapping, ttm_pt, by = "id")
 mapping <- mapping %>% mutate(tt_pt = travel_time_p001)
 
+tm_shape(mapping) +
+  tm_dots("tt_pt",
+          style="quantile",
+          title="Travel time PT") +
+  tm_basemap(server = "https://tileserver.memomaps.de/tilegen/{z}/{x}/{y}.png")
+
+
+
 # clean up
-mapping <- mapping %>% select(gitter_id_1km, einwohner, tt_pt, tt_car, geometry) %>% 
+mapping <- mapping %>% select(id, einwohner = einwohner_sum, tt_pt, tt_car, geometry) %>% 
   mutate(tt_ratio = tt_pt/tt_car)
 
 # mapview(mapping, zcol="tt_ratio", labels = T)
 # mapview(mapping, zcol="tt_car")
 # mapview(mapping, zcol="tt_pt")
-# mapview(mapping, zcol = "gitter_id_1km")
+# mapview(mapping, zcol = "id")
 
-# ggplot() +
-#   geom_sf(data = mapping, aes(color=tt_ratio)) +
-#     theme_void()
+tm_shape(mapping) +
+  tm_dots("tt_ratio",
+          style="quantile",
+          title="Travel time ratio") +
+  tm_basemap(server = "https://tileserver.memomaps.de/tilegen/{z}/{x}/{y}.png")
 
 
 # tmap_mode("view")
-# tm_shape(mapping) +
-#   tm_dots("tt_ratio", 
-#           style="quantile", 
-#           title="Travel time ratio") +
-#   tm_basemap(server = "https://tileserver.memomaps.de/tilegen/{z}/{x}/{y}.png")
+tm_shape(mapping) +
+  tm_dots("tt_ratio",
+          style="quantile",
+          title="Travel time ratio") +
+  tm_basemap(server = "https://tileserver.memomaps.de/tilegen/{z}/{x}/{y}.png")
 
 
 
@@ -181,7 +219,7 @@ jgc()
 # link to grid
 
 #get grid
-grid_query <- paste0("SELECT * FROM zensusgrid_1km_emm WHERE ST_DWithin(geom, st_transform(st_setsrid(ST_MakePoint(", lon, ",", lat,"),4326),3857),", census_grid_radius, ");")
+grid_query <- paste0("SELECT * FROM zensusgrid_500m_emm WHERE ST_DWithin(geom, st_transform(st_setsrid(ST_MakePoint(", lon, ",", lat,"),4326),3857),", census_grid_radius, ");")
 
 grid <- pgGetGeom(conn = con, query= grid_query)
 
@@ -189,19 +227,19 @@ mapping2 <- mapping %>% st_drop_geometry() %>% as_data_frame()
 mapping <- left_join(points_car, ttm_car, by = "id")
 
 grid2 <- grid %>% st_as_sf()
-grid3 <- left_join(grid2, mapping2, by = c("de_gitter_" = "gitter_id_1km"))
+grid3 <- left_join(grid2, mapping2, by = c("id" = "id"))
 
 # # analysis
 # 
-# mapping %>% 
-#   group_by(tt_car) %>% 
-#   summarize(affected = sum(einwohner)) %>% 
+# mapping %>%
+#   group_by(tt_car) %>%
+#   summarize(affected = sum(einwohner)) %>%
 #   ggplot(aes(x=tt_car, y = affected)) +
 #   geom_density(stat="identity")
 # 
-# mapping %>% 
-#   group_by(tt_pt) %>% 
-#   summarize(affected = sum(einwohner)) %>% 
+# mapping %>%
+#   group_by(tt_pt) %>%
+#   summarize(affected = sum(einwohner)) %>%
 #   ggplot(aes(x=tt_pt, y = affected)) +
 #   geom_density(stat="identity") +
 #   scale_x_continuous()
@@ -238,14 +276,24 @@ finalPlot <- ggdraw() +
   draw_plot(legend, 0.2, .65, 0.2, 0.2)
 finalPlot
 
+# fix issue with Inf travel time ratio
+grid3 <- grid3 %>% mutate(tt_ratio = ifelse(tt_ratio == Inf, NA, tt_ratio))
+ 
+ 
 tmap_mode("view")
 tm_shape(grid3) +
   tm_polygons("tt_pt",
           style="quantile",
-          title="Travel time ratio") +
+          title="Travel time ratio",
+          alpha = .5) +
   tm_basemap(server = "https://tileserver.memomaps.de/tilegen/{z}/{x}/{y}.png")
 
 # saveRDS(grid3, file = "grid40km.rds")
-# saveRDS(mapping, file = "mapping_40km.rds")
-# saveRDS(ttm_car, file = "ttm_car_40km.rds")
-# saveRDS(ttm_pt, file = "ttm_ptr_40km.rds")
+saveRDS(mapping, file = paste0(getwd(), "/results/2021-11-25_Weichselbaum/mapping.rds"))
+saveRDS(ttm_pt, file = paste0(getwd(), "/results/2021-11-25_Weichselbaum/ttm_pt.rds"))
+saveRDS(ttm_car, file = paste0(getwd(), "/results/2021-11-25_Weichselbaum/ttm_car.rds"))
+saveRDS(grid, file = paste0(getwd(), "/results/2021-11-25_Weichselbaum/grid.rds"))
+saveRDS(grid2, file = paste0(getwd(), "/results/2021-11-25_Weichselbaum/grid2.rds"))
+saveRDS(grid3, file = paste0(getwd(), "/results/2021-11-25_Weichselbaum/grid3.rds"))
+saveRDS(weichselbaum, file = paste0(getwd(), "/results/2021-11-25_Weichselbaum/weichselbaum.rds"))
+saveRDS(census_points_1km, file = paste0(getwd(), "/results/2021-11-25_Weichselbaum/censuspoints.rds"))
